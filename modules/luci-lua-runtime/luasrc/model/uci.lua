@@ -17,6 +17,8 @@ local type, tostring, tonumber, unpack = type, tostring, tonumber, unpack
 -- Cursor.commit the data to the actual config files.
 -- LuCI then needs to Cursor.apply the changes so daemons etc. are
 -- reloaded.
+
+-- 建立一个模块
 module "luci.model.uci"
 
 local ERRSTR = {
@@ -34,6 +36,7 @@ local ERRSTR = {
 
 local session_id = nil
 
+-- 封装ubus调用，自动添加会话ID，所有UCI操作的底层通信接口
 local function call(cmd, args)
 	if type(args) == "table" and session_id then
 		args.ubus_rpc_session = session_id
@@ -41,11 +44,12 @@ local function call(cmd, args)
 	return util.ubus("uci", cmd, args)
 end
 
-
+-- 返回uci实例
 function cursor()
 	return _M
 end
 
+-- uci实例状态
 function cursor_state()
 	return _M
 end
@@ -54,46 +58,52 @@ function substate(self)
 	return self
 end
 
-
+-- 获取UCI配置文件目录路径
 function get_confdir(self)
 	return "/etc/config"
 end
 
+-- 获取UCI临时保存目录路径
 function get_savedir(self)
 	return "/tmp/.uci"
 end
 
+-- 获取当前会话ID
 function get_session_id(self)
 	return session_id
 end
 
+-- 设置配置文件目录（此实现中总是返回false，不支持修改）
 function set_confdir(self, directory)
 	return false
 end
-
+-- 设置保存目录（此实现中总是返回false，不支持修改
 function set_savedir(self, directory)
 	return false
 end
 
+-- 设置会话ID，用于ubus认证
 function set_session_id(self, id)
 	session_id = id
 	return true
 end
 
-
+-- 加载配置文件（此实现中总是返回true，实际加载由ubus处理）
 function load(self, config)
 	return true
 end
 
+-- 保存配置到临时区域（此实现中总是返回true）
 function save(self, config)
 	return true
 end
 
+-- 卸载配置文件（此实现中总是返回true）
 function unload(self, config)
 	return true
 end
 
-
+-- 获取指定配置文件的待提交变更列表
 function changes(self, config)
 	local rv, err = call("changes", { config = config })
 
@@ -106,17 +116,21 @@ function changes(self, config)
 	end
 end
 
-
+-- 撤销指定配置文件的所有未提交变更
 function revert(self, config)
 	local _, err = call("revert", { config = config })
 	return (err == nil), ERRSTR[err]
 end
 
+-- 提交指定配置文件的变更到实际配置文件
 function commit(self, config)
 	local _, err = call("commit", { config = config })
 	return (err == nil), ERRSTR[err]
 end
 
+-- 应用配置变更，重启相关服务
+-- 支持回滚模式，可设置超时自动回滚
+-- 返回回滚令牌（如果启用回滚）
 function apply(self, rollback)
 	local _, err
 
@@ -170,6 +184,7 @@ function apply(self, rollback)
 	return (err == nil), ERRSTR[err]
 end
 
+-- 使用令牌确认配置变更，防止自动回滚
 function confirm(self, token)
 	local is_pending, time_remaining, rollback_sid, rollback_token = self:rollback_pending()
 
@@ -195,6 +210,7 @@ function confirm(self, token)
 	return false, "No data"
 end
 
+-- 手动回滚到应用前的配置状态
 function rollback(self)
 	local is_pending, time_remaining, rollback_sid = self:rollback_pending()
 
@@ -216,6 +232,7 @@ function rollback(self)
 	return false, "No data"
 end
 
+-- 检查是否有待处理的自动回滚
 function rollback_pending(self)
 	local rv, err = util.ubus("session", "get", {
 		ubus_rpc_session = "00000000000000000000000000000000",
@@ -241,7 +258,7 @@ function rollback_pending(self)
 	return false, ERRSTR[err]
 end
 
-
+-- 遍历指定配置文件中指定类型的所有配置段
 function foreach(self, config, stype, callback)
 	if type(callback) == "function" then
 		local rv, err = call("get", {
@@ -281,6 +298,7 @@ function foreach(self, config, stype, callback)
 	end
 end
 
+-- 获取配置选项的值
 local function _get(self, operation, config, section, option)
 	if section == nil then
 		return nil
@@ -310,14 +328,17 @@ local function _get(self, operation, config, section, option)
 	end
 end
 
+-- 获取配置选项的值
 function get(self, ...)
 	return _get(self, "get", ...)
 end
 
+-- 获取运行时状态信息（而非配置文件内容）
 function get_state(self, ...)
 	return _get(self, "state", ...)
 end
 
+-- 获取指定配置段的所有选项和值
 function get_all(self, config, section)
 	local rv, err = call("get", {
 		config  = config,
@@ -333,11 +354,13 @@ function get_all(self, config, section)
 	end
 end
 
+-- 获取布尔类型配置选项的值
 function get_bool(self, ...)
 	local val = self:get(...)
 	return (val == "1" or val == "true" or val == "yes" or val == "on")
 end
 
+-- 获取指定类型第一个配置段的指定选项值
 function get_first(self, config, stype, option, default)
 	local rv = default
 
@@ -360,6 +383,7 @@ function get_first(self, config, stype, option, default)
 	return rv
 end
 
+-- 获取列表类型配置选项的值
 function get_list(self, config, section, option)
 	if config and section and option then
 		local val = self:get(config, section, option)
@@ -368,7 +392,7 @@ function get_list(self, config, section, option)
 	return { }
 end
 
-
+-- 创建新的配置段，可指定名称和初始值
 function section(self, config, stype, name, values)
 	local rv, err = call("add", {
 		config = config,
@@ -386,11 +410,12 @@ function section(self, config, stype, name, values)
 	end
 end
 
-
+-- 添加匿名配置段（系统自动生成名称）
 function add(self, config, stype)
 	return self:section(config, stype)
 end
 
+-- 设置配置选项的值
 function set(self, config, section, option, ...)
 	if select('#', ...) == 0 then
 		local sname, err = self:section(config, option, section)
@@ -405,6 +430,7 @@ function set(self, config, section, option, ...)
 	end
 end
 
+-- 设置列表类型配置选项的值
 function set_list(self, config, section, option, value)
 	if section == nil or option == nil then
 		return false
@@ -417,6 +443,7 @@ function set_list(self, config, section, option, value)
 	end
 end
 
+-- 批量设置配置段的多个选项值
 function tset(self, config, section, values)
 	local _, err = call("set", {
 		config  = config,
@@ -426,6 +453,7 @@ function tset(self, config, section, values)
 	return (err == nil), ERRSTR[err]
 end
 
+-- 重新排序配置段的位置
 function reorder(self, config, section, index)
 	local sections
 
@@ -460,7 +488,7 @@ function reorder(self, config, section, index)
 	return (err == nil), ERRSTR[err]
 end
 
-
+-- 删除指定的配置选项或整个配置段
 function delete(self, config, section, option)
 	local _, err = call("delete", {
 		config  = config,
@@ -470,6 +498,7 @@ function delete(self, config, section, option)
 	return (err == nil), ERRSTR[err]
 end
 
+-- 批量删除指定类型的配置段
 function delete_all(self, config, stype, comparator)
 	local _, err
 	if type(comparator) == "table" then
