@@ -28,6 +28,11 @@ local getmetatable = getmetatable
 module "luci.json"
 
 
+-- 将JSON字符串解码为Lua对象
+-- 示例：
+-- 		local data = json.decode('{"name":"test","value":123}')
+-- 		print(data.name)  -- 输出：test
+-- 		print(data.value) -- 输出：123
 function decode(json, ...)
 	local a = ActiveDecoder(function() return nil end, ...)
 	a.chunk = json
@@ -35,7 +40,14 @@ function decode(json, ...)
 	return s and obj or nil
 end
 
-
+--[[
+功能：将Lua对象编码为JSON字符串
+示例：
+	local json = require "luci.json"
+	local data = {name = "test", value = 123, items = {"a", "b", "c"}}
+	local json_str = json.encode(data)
+	print(json_str) -- 输出：{"name":"test","value":123,"items":["a","b","c"]}
+]]
 function encode(obj, ...)
 	local out = {}
 	local e = Encoder(obj, 1, ...):source()
@@ -47,13 +59,17 @@ function encode(obj, ...)
 	return not err and table.concat(out) or nil
 end
 
-
+-- 返回JSON null值的表示
 function null()
 	return null
 end
 
 Encoder = util.class()
 
+--[[
+功能：初始化编码器
+参数：data-要编码的数据;buffersize-缓冲区大小（默认512字节）;fastescape - 是否使用快速转义
+]]
 function Encoder.__init__(self, data, buffersize, fastescape)
 	self.data = data
 	self.buffersize = buffersize or 512
@@ -63,6 +79,7 @@ function Encoder.__init__(self, data, buffersize, fastescape)
 	getmetatable(self).__call = Encoder.source
 end
 
+-- 创建编码器的数据源函数，使用协程实现流式编码
 function Encoder.source(self)
 	local source = coroutine.create(self.dispatch)
 	return function()
@@ -75,6 +92,7 @@ function Encoder.source(self)
 	end
 end
 
+-- 根据数据类型分发到相应的解析器
 function Encoder.dispatch(self, data, start)
 	local parser = self.parsers[type(data)]
 
@@ -89,6 +107,7 @@ function Encoder.dispatch(self, data, start)
 	end
 end
 
+-- 将数据块添加到输出缓冲区，管理缓冲区溢出
 function Encoder.put(self, chunk)
 	if self.buffersize < 2 then
 		coroutine.yield(chunk)
@@ -113,18 +132,22 @@ function Encoder.put(self, chunk)
 	end
 end
 
+-- 编码nil值为JSON null
 function Encoder.parse_nil(self)
 	self:put("null")
 end
 
+-- 编码布尔值为JSON布尔值
 function Encoder.parse_bool(self, obj)
 	self:put(obj and "true" or "false")
 end
 
+-- 编码数字为JSON数字
 function Encoder.parse_number(self, obj)
 	self:put(tostring(obj))
 end
 
+-- 编码字符串为JSON字符串，处理转义字符
 function Encoder.parse_string(self, obj)
 	if self.fastescape then
 		self:put('"' .. obj:gsub('\\', '\\\\'):gsub('"', '\\"') .. '"')
@@ -139,6 +162,7 @@ function Encoder.parse_string(self, obj)
 	end
 end
 
+-- 编码表格和迭代器
 function Encoder.parse_iter(self, obj)
 	if obj == null then
 		return self:put("null")
@@ -181,6 +205,7 @@ function Encoder.parse_iter(self, obj)
 	end
 end
 
+-- 编码用户数据为字符串
 function Encoder.parse_udata(self, obj)
 	return self:parse_string(tostring(obj))
 end
@@ -198,11 +223,13 @@ Encoder.parsers = {
 
 Decoder = util.class()
 
+-- 初始化解码器
 function Decoder.__init__(self, customnull)
 	self.cnull = customnull
 	getmetatable(self).__call = Decoder.sink
 end
 
+-- 创建解码器的数据接收器，使用协程实现流式解码
 function Decoder.sink(self)
 	local sink = coroutine.create(self.dispatch)
 	return function(...)
@@ -210,11 +237,12 @@ function Decoder.sink(self)
 	end
 end
 
-
+-- 获取解码后的数据
 function Decoder.get(self)
 	return self.data
 end
 
+-- 主解码分发器，根据字符选择相应的解析器
 function Decoder.dispatch(self, chunk, src_err, strict)
 	local robject, object
 	local oset = false
@@ -252,14 +280,14 @@ function Decoder.dispatch(self, chunk, src_err, strict)
 	self.data = object
 end
 
-
+-- 从数据源获取下一个数据块
 function Decoder.fetch(self)
 	local tself, chunk, src_err = coroutine.yield()
 	assert(chunk or not src_err, src_err)
 	return chunk
 end
 
-
+-- 确保数据块至少包含指定字节数
 function Decoder.fetch_atleast(self, chunk, bytes)
 	while #chunk < bytes do
 		local nchunk = self:fetch()
@@ -270,7 +298,7 @@ function Decoder.fetch_atleast(self, chunk, bytes)
 	return chunk
 end
 
-
+-- 获取数据直到找到指定模式
 function Decoder.fetch_until(self, chunk, pattern)
 	local start = chunk:find(pattern)
 
@@ -284,7 +312,7 @@ function Decoder.fetch_until(self, chunk, pattern)
 	return chunk, start
 end
 
-
+-- 跳过空白字符
 function Decoder.parse_space(self, chunk)
 	local start = chunk:find("[^%s]")
 
@@ -299,29 +327,29 @@ function Decoder.parse_space(self, chunk)
 	return chunk:sub(start)
 end
 
-
+-- 解析字面量（如true、false、null）
 function Decoder.parse_literal(self, chunk, literal, value)
 	chunk = self:fetch_atleast(chunk, #literal)
 	assert(chunk:sub(1, #literal) == literal, "Invalid character sequence")
 	return chunk:sub(#literal + 1), value
 end
 
-
+-- 解析JSON null值
 function Decoder.parse_null(self, chunk)
 	return self:parse_literal(chunk, "null", self.cnull and null)
 end
 
-
+-- 解析JSON true值
 function Decoder.parse_true(self, chunk)
 	return self:parse_literal(chunk, "true", true)
 end
 
-
+-- 解析JSON false值
 function Decoder.parse_false(self, chunk)
 	return self:parse_literal(chunk, "false", false)
 end
 
-
+-- 解析JSON数字
 function Decoder.parse_number(self, chunk)
 	local chunk, start = self:fetch_until(chunk, "[^0-9eE.+-]")
 	local number = tonumber(chunk:sub(1, start - 1))
@@ -329,7 +357,7 @@ function Decoder.parse_number(self, chunk)
 	return chunk:sub(start), number
 end
 
-
+-- 解析JSON字符串，处理转义序列
 function Decoder.parse_string(self, chunk)
 	local str = ""
 	local object = nil
@@ -359,7 +387,7 @@ function Decoder.parse_string(self, chunk)
 	return chunk, str
 end
 
-
+-- 将Unicode码点编码为UTF-8字符
 function Decoder.utf8_encode(self, s1, s2)
 	local n = s1 * 256 + s2
 
@@ -388,7 +416,7 @@ function Decoder.utf8_encode(self, s1, s2)
 	end
 end
 
-
+-- 解析转义序列，包括Unicode转义
 function Decoder.parse_escape(self, chunk)
 	local str = ""
 	chunk = self:fetch_atleast(chunk:sub(2), 1)
@@ -423,7 +451,7 @@ function Decoder.parse_escape(self, chunk)
 	end
 end
 
-
+-- 解析JSON数组
 function Decoder.parse_array(self, chunk)
 	chunk = chunk:sub(2)
 	local array = {}
@@ -447,7 +475,7 @@ function Decoder.parse_array(self, chunk)
 	return chunk, array
 end
 
-
+-- 解析JSON对象
 function Decoder.parse_object(self, chunk)
 	chunk = chunk:sub(2)
 	local array = {}
@@ -478,7 +506,7 @@ function Decoder.parse_object(self, chunk)
 	return chunk, array
 end
 
-
+-- 解析分隔符（逗号、冒号、括号等）
 function Decoder.parse_delimiter(self, chunk, delimiter)
 	while true do
 		chunk = self:fetch_atleast(chunk, 1)
@@ -507,6 +535,7 @@ Decoder.parsers = {
 
 ActiveDecoder = util.class(Decoder)
 
+-- 初始化主动解码器，继承自Decoder
 function ActiveDecoder.__init__(self, source, customnull)
 	Decoder.__init__(self, customnull)
 	self.source = source
@@ -514,7 +543,7 @@ function ActiveDecoder.__init__(self, source, customnull)
 	getmetatable(self).__call = self.get
 end
 
-
+-- 从数据源获取并解码JSON对象
 function ActiveDecoder.get(self)
 	local chunk, src_err, object
 	if not self.chunk then
@@ -527,7 +556,7 @@ function ActiveDecoder.get(self)
 	return object
 end
 
-
+-- 从数据源获取数据块
 function ActiveDecoder.fetch(self)
 	local chunk, src_err = self.source()
 	assert(chunk or not src_err, src_err)

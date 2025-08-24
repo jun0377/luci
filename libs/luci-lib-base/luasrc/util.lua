@@ -27,6 +27,8 @@ module "luci.util"
 --
 -- Pythonic string formatting extension
 --
+
+-- 扩展字符串元表 ：为所有字符串添加 % 操作符支持
 getmetatable("").__mod = function(a, b)
 	local ok, res
 
@@ -58,6 +60,7 @@ end
 --
 
 -- Instantiates a class
+-- 类实例化函数
 local function _instantiate(class, ...)
 	local inst = setmetatable({}, {__index = class})
 
@@ -77,6 +80,8 @@ end
 -- to the __init__ function of this class - if such a function exists.
 -- The __init__ function must be used to set any object parameters that are not shared
 -- with other objects of this class. Any return values will be ignored.
+
+-- 类工厂函数
 function class(base)
 	return setmetatable({}, {
 		__call  = _instantiate,
@@ -84,6 +89,7 @@ function class(base)
 	})
 end
 
+-- 类型检查函数
 function instanceof(object, class)
 	local meta = getmetatable(object)
 	while meta and meta.__index do
@@ -108,11 +114,12 @@ end
 --
 -- Debugging routines
 --
-
+-- 错误输出函数
 function perror(obj)
 	return io.stderr:write(tostring(obj) .. "\n")
 end
 
+-- 表结构打印函数
 function dumptable(t, maxdepth, i, seen)
 	i = i or 0
 	seen = seen or setmetatable({}, {__mode="k"})
@@ -143,6 +150,12 @@ function pcdata(value)
 	return xml.pcdata(value)
 end
 
+-- URL编码 - 将任意值转换为 URL 安全的编码格式，用于在 HTTP 请求中安全传输数据
+-- 示例：
+-- 		urlencode("hello world")     -- 返回: "hello%20world"
+--		urlencode("user@domain.com") -- 返回: "user%40domain.com"
+--		urlencode("测试")             -- 返回: "%E6%B5%8B%E8%AF%95"
+-- 		urlencode(123)               -- 返回: "123"
 function urlencode(value)
 	if value ~= nil then
 		local str = tostring(value)
@@ -152,6 +165,7 @@ function urlencode(value)
 	return nil
 end
 
+-- URL解码
 function urldecode(value, decode_plus)
 	if value ~= nil then
 		local flag = decode_plus and lhttp.DECODE_PLUS or 0
@@ -170,6 +184,13 @@ function striptags(value)
 	return xml.striptags(value)
 end
 
+-- 将任意字符串安全地包装在单引号中，使其可以安全地传递给 shell 命令
+-- 示例：
+--		构建安全的shell命令： local cmd = "ls " .. shellquote(user_input)
+--		文件路径处理 ：处理包含空格或特殊字符的文件路径 local path = shellquote("/path/with spaces/file.txt")
+--		shellquote("hello world")     -- 返回: "'hello world'"
+--		shellquote("it's working")    -- 返回: "'it'\\''s working'"
+--		shellquote("$HOME/file")      -- 返回: "'$HOME/file'"
 function shellquote(value)
 	return string.format("'%s'", string.gsub(value or "", "'", "'\\''"))
 end
@@ -178,6 +199,7 @@ end
 -- literally except for single quotes (which terminate the string)
 -- (and the exception noted below for dash (-) at the start of a
 -- command line parameter).
+-- 处理shell单引号字符串中的单引号字符转义问题，确保包含单引号的字符串能够安全地在shell命令中使用
 function shellsqescape(value)
    local res
    res, _ = string.gsub(value, "'", "'\\''")
@@ -190,6 +212,7 @@ end
 -- escaped to resolve this.  This requires in some funky special-case
 -- handling.  It may actually be a property of the getopt function
 -- rather than the shell proper.
+-- 处理shell命令行参数中以破折号（ - ）开头的特殊情况，确保这些参数不会被shell误解为选项标志
 function shellstartsqescape(value)
    res, _ = string.gsub(value, "^%-", "\\-")
    return shellsqescape(res)
@@ -200,6 +223,7 @@ end
 -- string. The optional last parameter, regex, specifies whether the separator
 -- sequence is interpreted as regular expression.
 --					pattern as regular expression (optional, default is false)
+-- 字符串分割函数
 function split(str, pat, max, regex)
 	pat = pat or "\n"
 	max = max or #str
@@ -233,10 +257,17 @@ function split(str, pat, max, regex)
 	return t
 end
 
+-- 去除字符串首尾的空白字符
 function trim(str)
 	return (str:gsub("^%s*(.-)%s*$", "%1"))
 end
 
+-- 计算字符串中匹配pat的次数
+-- 	统计字符出现次数 count = cmatch("hello world", "l") 	结果3
+--	统计单词出现次数 count = cmatch("the cat and the dog", "the") 	结果2
+-- 	统计数字出现次数 count = cmatch("abc123def456ghi789", "%d+")	结果: 3
+--	统计 IP 地址格式 count = cmatch("192.168.1.1 connected, 10.0.0.1 failed, 172.16.0.1 timeout", "%d+%.%d+%.%d+%.%d+") 结果: 3 
+-- 	统计换行符 count = cmatch("line1\nline2\nline3\n", "\n")	结果: 3
 function cmatch(str, pat)
 	local count = 0
 	for _ in str:gmatch(pat) do count = count + 1 end
@@ -246,6 +277,7 @@ end
 -- one token per invocation, the tokens are separated by whitespace. If the
 -- input value is a table, it is transformed into a string first. A nil value
 -- will result in a valid iterator which aborts with the first invocation.
+-- 通用的迭代器生成函数，用于处理不同类型的输入值并返回相应的迭代器
 function imatch(v)
 	if type(v) == "table" then
 		local k = nil
@@ -284,6 +316,7 @@ end
 --  o "kib" - one si kilobyte (1000)
 --  o "mib"	- one si megabyte (1000*1000)
 --  o "gib"	- one si gigabyte (1000*1000*1000)
+-- 单位解析函数
 function parse_units(ustr)
 
 	local val = 0
@@ -332,7 +365,7 @@ string.trim        = trim
 string.cmatch      = cmatch
 string.parse_units = parse_units
 
-
+-- 表追加函数
 function append(src, ...)
 	for i, a in ipairs({...}) do
 		if type(a) == "table" then
@@ -346,10 +379,12 @@ function append(src, ...)
 	return src
 end
 
+-- 将多个表或单个值合并成一个新的数组表
 function combine(...)
 	return append({}, ...)
 end
 
+-- 检查表中是否包含指定的值
 function contains(table, value)
 	for k, v in pairs(table) do
 		if value == v then
@@ -360,12 +395,14 @@ function contains(table, value)
 end
 
 -- Both table are - in fact - merged together.
+-- 将 updates 表中的所有键值对复制到目标表 t 中，实现表的批量更新
 function update(t, updates)
 	for k, v in pairs(updates) do
 		t[k] = v
 	end
 end
 
+-- 从给定的表中提取所有键，并以数组形式返回
 function keys(t)
 	local keys = { }
 	if t then
@@ -376,6 +413,7 @@ function keys(t)
 	return keys
 end
 
+-- 对象克隆函数
 function clone(object, deep)
 	local copy = {}
 
@@ -391,6 +429,7 @@ end
 
 
 -- Serialize the contents of a table value.
+-- 表序列化函数
 function _serialize_table(t, seen)
 	assert(not seen[t], "Recursion detected.")
 	seen[t] = true
@@ -419,6 +458,7 @@ function _serialize_table(t, seen)
 end
 
 -- with loadstring().
+-- 数据序列化函数
 function serialize_data(val, seen)
 	seen = seen or setmetatable({}, {__mode="k"})
 
@@ -449,6 +489,7 @@ end
 --
 
 -- will be stripped before it is returned.
+-- 将任意Lua值或函数转换为对应的字节码表示
 function get_bytecode(val)
 	local code
 
@@ -463,6 +504,7 @@ end
 
 -- numbers and debugging numbers will be discarded. Original version by
 -- Peter Cawley (http://lua-users.org/lists/lua-l/2008-02/msg01158.html)
+-- 移除Lua字节码中的调试信息，减小编译后代码的体积
 function strip_bytecode(code)
 	local version, format, endian, int, size, ins, num, lnum = code:byte(5, 12)
 	local subint
@@ -531,7 +573,7 @@ end
 --
 -- Sorting iterator functions
 --
-
+-- 创建一个排序的表迭代器，支持自定义比较函数
 function _sortiter( t, f )
 	local keys = { }
 
@@ -553,16 +595,19 @@ function _sortiter( t, f )
 end
 
 -- the provided callback function.
+-- 返回一个按自定义比较函数排序的键值对迭代器
 function spairs(t,f)
 	return _sortiter( t, f )
 end
 
 -- The table pairs are sorted by key.
+-- 返回一个按表键（key）排序的键值对迭代器
 function kspairs(t)
 	return _sortiter( t )
 end
 
 -- The table pairs are sorted by value.
+-- 返回一个按表值（value）排序的键值对迭代器
 function vspairs(t)
 	return _sortiter( t, function (a,b) return t[a] < t[b] end )
 end
@@ -571,11 +616,12 @@ end
 --
 -- System utility functions
 --
-
+-- 检测当前系统的字节序
 function bigendian()
 	return string.byte(string.dump(function() end), 7) == 0
 end
 
+-- 命令执行函数
 function exec(command)
 	local pp   = io.popen(command)
 	local data = pp:read("*a")
@@ -584,6 +630,11 @@ function exec(command)
 	return data
 end
 
+-- 命令迭代器
+-- 	逐行处理 ：返回迭代器函数，每次调用返回一行
+-- 	内存友好 ：不需要将整个输出加载到内存
+-- 	自动清理 ：读取完毕后自动关闭管道
+-- 	错误处理 ：popen失败时返回nil
 function execi(command)
 	local pp = io.popen(command)
 
@@ -639,6 +690,7 @@ local function ubus_return(...)
 	return ...
 end
 
+-- ubus接口函数
 function ubus(object, method, data, path, timeout)
 	if not _ubus_connection then
 		_ubus_connection = _ubus.connect(path, timeout)
@@ -657,6 +709,7 @@ function ubus(object, method, data, path, timeout)
 	end
 end
 
+-- 将 Lua 数据结构转换为 JSON 字符串
 function serialize_json(x, cb)
 	local js = json.stringify(x)
 	if type(cb) == "function" then
@@ -729,6 +782,7 @@ local function id(trace, ...)
 	return trace
 end
 
+-- 协程安全的xpcall
 function coxpcall(f, err, ...)
 	local current = coroutine.running()
 	if not current then

@@ -13,53 +13,65 @@ module "luci.http"
 
 HTTP_MAX_CONTENT      = 1024*100		-- 100 kB maximum content size
 
+-- 关闭HTTP连接
 function close()
 	L.http:close()
 end
 
+-- 获取HTTP请求的内容体
 function content()
 	return L.http:content()
 end
 
+-- 获取表单字段的值
 function formvalue(name, noparse)
 	return L.http:formvalue(name, noparse)
 end
 
+-- 获取具有指定前缀的所有表单字段
 function formvaluetable(prefix)
 	return L.http:formvaluetable(prefix)
 end
 
+-- 获取指定名称的Cookie值
 function getcookie(name)
 	return L.http:getcookie(name)
 end
 
 -- or the environment table itself.
+-- 获取环境变量或HTTP环境信息
 function getenv(name)
 	return L.http:getenv(name)
 end
 
+-- 设置文件上传处理回调函数
 function setfilehandler(callback)
 	return L.http:setfilehandler(callback)
 end
 
+-- 设置HTTP响应头
 function header(key, value)
 	L.http:header(key, value)
 end
 
+-- 准备响应内容，设置MIME类型
 function prepare_content(mime)
 	L.http:prepare_content(mime)
 end
 
+-- 获取HTTP输入源
 function source()
 	return L.http.input
 end
 
+-- 设置HTTP响应状态码和消息
 function status(code, message)
 	L.http:status(code, message)
 end
 
 -- This function is as a valid LTN12 sink.
 -- If the content chunk is nil this function will automatically invoke close.
+-- 写入响应内容，作为LTN12 sink使用
 function write(content, src_err)
 	if src_err then
 		error(src_err)
@@ -68,14 +80,17 @@ function write(content, src_err)
 	return L.print(content)
 end
 
+-- 高效传输文件描述符内容
 function splice(fd, size)
 	coroutine.yield(6, fd, size)
 end
 
+-- HTTP重定向到指定URL
 function redirect(url)
 	L.http:redirect(url)
 end
 
+-- 构建URL查询字符串
 function build_querystring(q)
 	local s, n, k, v = {}, 1, nil, nil
 
@@ -94,12 +109,14 @@ urldecode = util.urldecode
 
 urlencode = util.urlencode
 
+-- 写入JSON格式的响应
 function write_json(x)
 	L.printf('%J', x)
 end
 
 -- separated by "&". Tables are encoded as parameters with multiple values by
 -- repeating the parameter name with each value.
+-- 将表编码为URL参数格式，支持数组值
 function urlencode_params(tbl)
 	local k, v
 	local n, enc = 1, {}
@@ -133,6 +150,7 @@ function urlencode_params(tbl)
 	return table.concat(enc, "")
 end
 
+-- 提供HTTP请求上下文对象
 context = {
 	request = {
 		formvalue      = function(self, ...) return formvalue(...)      end;
