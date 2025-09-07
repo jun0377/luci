@@ -1,6 +1,7 @@
 -- Copyright 2009-2015 Jo-Philipp Wich <jow@openwrt.org>
 -- Licensed to the public under the Apache License 2.0.
 
+-- 导入基本Lua函数并赋值给本地变量，提高访问效率
 local type, next, pairs, ipairs, loadfile, table, select
 	= type, next, pairs, ipairs, loadfile, table, select
 
@@ -8,21 +9,24 @@ local tonumber, tostring, math = tonumber, tostring, math
 
 local pcall, require, setmetatable = pcall, require, setmetatable
 
-local nxo = require "nixio"
-local nfs = require "nixio.fs"
-local ipc = require "luci.ip"
-local utl = require "luci.util"
-local uci = require "luci.model.uci"
-local lng = require "luci.i18n"
-local jsc = require "luci.jsonc"
+local nxo = require "nixio"					-- 系统/网络操作库
+local nfs = require "nixio.fs"				-- 文件系统操作
+local ipc = require "luci.ip"				-- IP地址处理
+local utl = require "luci.util"				-- 实用工具函数
+local uci = require "luci.model.uci"		-- UCI配置接口
+local lng = require "luci.i18n"				-- 国际化支持
+local jsc = require "luci.jsonc"			-- JSON处理
 
 module "luci.model.network"
 
-
+-- 虚拟接口的匹配模式
 IFACE_PATTERNS_VIRTUAL  = { }
+-- 需要忽略的接口匹配模式
 IFACE_PATTERNS_IGNORE   = { "^wmaster%d", "^wifi%d", "^hwsim%d", "^imq%d", "^ifb%d", "^mon%.wlan%d", "^sit%d", "^gre%d", "^gretap%d", "^ip6gre%d", "^ip6tnl%d", "^tunl%d", "^lo$" }
+-- 无线接口的匹配模式
 IFACE_PATTERNS_WIRELESS = { "^wlan%d", "^wl%d", "^ath%d", "^%w+%.network%d" }
 
+-- 错误码
 IFACE_ERRORS = {
 	CONNECT_FAILED			= lng.translate("Connection attempt failed"),
 	INVALID_ADDRESS			= lng.translate("IP address is invalid"),
@@ -39,15 +43,17 @@ IFACE_ERRORS = {
 	PIN_FAILED				= lng.translate("PIN code rejected")
 }
 
-
+-- 协议基类
 protocol = utl.class()
 
+-- 已注册的协议
 local _protocols = { }
 
 local _interfaces, _bridge, _switch, _tunnel, _swtopo
 local _ubusnetcache, _ubusdevcache, _ubuswificache
 local _uci
 
+-- 从UCI配置中过滤指定值 c: 配置名称，s: 节名称，o: 选项名称，r: 要移除的值
 function _filter(c, s, o, r)
 	local val = _uci:get(c, s, o)
 	if val then
@@ -78,6 +84,7 @@ function _filter(c, s, o, r)
 	end
 end
 
+-- 向UCI配置中追加值 c: 配置名称，s: 节名称，o: 选项名称，a: 要添加的值
 function _append(c, s, o, a)
 	local val = _uci:get(c, s, o) or ""
 	if type(val) == "string" then
@@ -101,6 +108,7 @@ function _append(c, s, o, a)
 	end
 end
 
+-- 返回第一个非空字符串，或第二个字符串（如果第一个为空）
 function _stror(s1, s2)
 	if not s1 or #s1 == 0 then
 		return s2 and #s2 > 0 and s2
@@ -109,10 +117,12 @@ function _stror(s1, s2)
 	end
 end
 
+-- UCI获取配置值
 function _get(c, s, o)
 	return _uci:get(c, s, o)
 end
 
+-- 置或删除UCI配置
 function _set(c, s, o, v)
 	if v ~= nil then
 		if type(v) == "boolean" then v = v and "1" or "0" end
@@ -122,6 +132,7 @@ function _set(c, s, o, v)
 	end
 end
 
+-- 获取无线网络状态（使用ubus缓存）
 local function _wifi_state()
 	if not next(_ubuswificache) then
 		_ubuswificache = utl.ubus("network.wireless", "status", {}) or {}
@@ -129,6 +140,7 @@ local function _wifi_state()
 	return _ubuswificache
 end
 
+-- 通过无线配置节ID获取无线状态
 local function _wifi_state_by_sid(sid)
 	local t1, n1 = _uci:get("wireless", sid)
 	if t1 == "wifi-iface" and n1 ~= nil then
@@ -153,6 +165,7 @@ local function _wifi_state_by_sid(sid)
 	end
 end
 
+-- 通过接口名称获取无线状态
 local function _wifi_state_by_ifname(ifname)
 	if type(ifname) == "string" then
 		local radioname, radiostate
@@ -174,6 +187,7 @@ local function _wifi_state_by_ifname(ifname)
 	end
 end
 
+-- 判断接口是否为无线接口
 function _wifi_iface(x)
 	local _, p
 	for _, p in ipairs(IFACE_PATTERNS_WIRELESS) do
@@ -184,6 +198,7 @@ function _wifi_iface(x)
 	return (nfs.access("/sys/class/net/%s/phy80211" % x) == true)
 end
 
+-- 通过接口名称获取无线信息（使用iwinfo库）
 local function _wifi_iwinfo_by_ifname(ifname, force_phy_only)
 	local stat, iwinfo = pcall(require, "iwinfo")
 	local iwtype = stat and type(ifname) == "string" and iwinfo.type(ifname)
@@ -216,6 +231,7 @@ local function _wifi_iwinfo_by_ifname(ifname, force_phy_only)
 	end
 end
 
+-- 通过网络ID获取无线配置节ID
 local function _wifi_sid_by_netid(netid)
 	if type(netid) == "string" then
 		local radioname, netidx = netid:match("^(%w+)%.network(%d+)$")
@@ -239,6 +255,7 @@ local function _wifi_sid_by_netid(netid)
 	end
 end
 
+-- 通过接口名称获取无线配置节ID
 function _wifi_sid_by_ifname(ifn)
 	local sid = _wifi_sid_by_netid(ifn)
 	if sid then
@@ -251,6 +268,7 @@ function _wifi_sid_by_ifname(ifn)
 	end
 end
 
+-- 通过无线配置节ID获取网络ID
 local function _wifi_netid_by_sid(sid)
 	local t, n = _uci:get("wireless", sid)
 	if t == "wifi-iface" and n ~= nil then
@@ -274,6 +292,7 @@ local function _wifi_netid_by_sid(sid)
 	end
 end
 
+-- 通过网络名称获取无线网络ID
 local function _wifi_netid_by_netname(name)
 	local netid = nil
 
@@ -291,6 +310,7 @@ local function _wifi_netid_by_netname(name)
 	return netid
 end
 
+-- 判断接口是否为虚拟接口
 function _iface_virtual(x)
 	local _, p
 	for _, p in ipairs(IFACE_PATTERNS_VIRTUAL) do
@@ -301,6 +321,7 @@ function _iface_virtual(x)
 	return false
 end
 
+-- 判断接口是否应被忽略
 function _iface_ignore(x)
 	local _, p
 	for _, p in ipairs(IFACE_PATTERNS_IGNORE) do
@@ -311,9 +332,11 @@ function _iface_ignore(x)
 	return false
 end
 
+-- 初始化网络模型
 function init(cursor)
 	_uci = cursor or _uci or uci.cursor()
 
+	-- 初始化数据结构
 	_interfaces = { }
 	_bridge     = { }
 	_switch     = { }
@@ -325,6 +348,7 @@ function init(cursor)
 	_ubuswificache = { }
 
 	-- read interface information
+	-- 读取接口信息
 	local n, i
 	for n, i in ipairs(nxo.getifaddrs()) do
 		local name = i.name:match("[^:]+")
@@ -356,6 +380,7 @@ function init(cursor)
 	end
 
 	-- read bridge informaton
+	-- 读取网桥信息
 	local b, l
 	for l in utl.execi("brctl show") do
 		if not l:match("STP") then
@@ -380,6 +405,7 @@ function init(cursor)
 	end
 
 	-- read switch topology
+	-- 读取交换机拓扑
 	local boardinfo = jsc.parse(nfs.readfile("/etc/board.json") or "")
 	if type(boardinfo) == "table" and type(boardinfo.switch) == "table" then
 		local switch, layout
@@ -455,16 +481,19 @@ function init(cursor)
 	return _M
 end
 
+-- 保存UCI配置
 function save(self, ...)
 	_uci:save(...)
 	_uci:load(...)
 end
 
+-- 提交UCI配置
 function commit(self, ...)
 	_uci:commit(...)
 	_uci:load(...)
 end
 
+-- 获取接口名称
 function ifnameof(self, x)
 	if utl.instanceof(x, interface) then
 		return x:name()
@@ -475,6 +504,7 @@ function ifnameof(self, x)
 	end
 end
 
+-- 获取指定协议
 function get_protocol(self, protoname, netname)
 	local v = _protocols[protoname]
 	if v then
@@ -482,6 +512,7 @@ function get_protocol(self, protoname, netname)
 	end
 end
 
+-- 获取所有协议
 function get_protocols(self)
 	local p = { }
 	local _, v
@@ -491,6 +522,7 @@ function get_protocols(self)
 	return p
 end
 
+-- 注册协议
 function register_protocol(self, protoname)
 	local proto = utl.class(protocol)
 
@@ -508,10 +540,12 @@ function register_protocol(self, protoname)
 	return proto
 end
 
+-- 注册虚拟接口匹配模式
 function register_pattern_virtual(self, pat)
 	IFACE_PATTERNS_VIRTUAL[#IFACE_PATTERNS_VIRTUAL+1] = pat
 end
 
+-- 注册错误代码
 function register_error_code(self, code, message)
 	if type(code) == "string" and
 	   type(message) == "string" and
@@ -524,10 +558,12 @@ function register_error_code(self, code, message)
 	return false
 end
 
+-- 检查是否支持IPv6
 function has_ipv6(self)
 	return nfs.access("/proc/net/ipv6_route")
 end
 
+-- 添加网络
 function add_network(self, n, options)
 	local oldnet = self:get_network(n)
 	if n and #n > 0 and n:match("^[a-zA-Z0-9_]+$") and not oldnet then
@@ -545,6 +581,7 @@ function add_network(self, n, options)
 	end
 end
 
+-- 获取网络
 function get_network(self, n)
 	if n and _uci:get("network", n) == "interface" then
 		return network(n)
@@ -558,6 +595,7 @@ function get_network(self, n)
 	end
 end
 
+-- 获取所有网络
 function get_networks(self)
 	local nets = { }
 	local nls = { }
@@ -592,6 +630,7 @@ function get_networks(self)
 	return nets
 end
 
+-- 删除网络
 function del_network(self, n)
 	local r = _uci:delete("network", n)
 	if r then
@@ -633,6 +672,7 @@ function del_network(self, n)
 	return r
 end
 
+-- 重命名网络
 function rename_network(self, old, new)
 	local r
 	if new and #new > 0 and new:match("^[a-zA-Z0-9_]+$") and not self:get_network(new) then
@@ -683,6 +723,7 @@ function rename_network(self, old, new)
 	return r or false
 end
 
+-- 获取接口
 function get_interface(self, i)
 	if _interfaces[i] or _wifi_iface(i) then
 		return interface(i)
@@ -692,12 +733,14 @@ function get_interface(self, i)
 	end
 end
 
+-- 获取所有接口
 function get_interfaces(self)
 	local iface
 	local ifaces = { }
 	local nfs = { }
 
 	-- find normal interfaces
+	-- 普通接口
 	_uci:foreach("network", "interface",
 		function(s)
 			for iface in utl.imatch(s.ifname) do
@@ -714,6 +757,7 @@ function get_interfaces(self)
 	end
 
 	-- find vlan interfaces
+	-- VLAN接口
 	_uci:foreach("network", "switch_vlan",
 		function(s)
 			if type(s.ports) ~= "string" or
@@ -750,7 +794,8 @@ function get_interfaces(self)
 		ifaces[#ifaces+1] = nfs[iface]
 	end
 
-	-- find wifi interfaces
+	-- find wifi 
+	-- 无线接口
 	local num = { }
 	local wfs = { }
 	_uci:foreach("wireless", "wifi-iface",
@@ -769,16 +814,19 @@ function get_interfaces(self)
 	return ifaces
 end
 
+-- 忽略接口
 function ignore_interface(self, x)
 	return _iface_ignore(x)
 end
 
+-- 获取无线设备
 function get_wifidev(self, dev)
 	if _uci:get("wireless", dev) == "wifi-device" then
 		return wifidev(dev)
 	end
 end
 
+-- 获取所有无线设备
 function get_wifidevs(self)
 	local devs = { }
 	local wfd  = { }
@@ -794,6 +842,7 @@ function get_wifidevs(self)
 	return devs
 end
 
+-- 获取无线网络
 function get_wifinet(self, net)
 	local wnet = _wifi_sid_by_ifname(net)
 	if wnet then
@@ -801,6 +850,7 @@ function get_wifinet(self, net)
 	end
 end
 
+-- 添加无线网络
 function add_wifinet(self, net, options)
 	if type(options) == "table" and options.device and
 		_uci:get("wireless", options.device) == "wifi-device"
@@ -810,6 +860,7 @@ function add_wifinet(self, net, options)
 	end
 end
 
+-- 删除无线网络
 function del_wifinet(self, net)
 	local wnet = _wifi_sid_by_ifname(net)
 	if wnet then
@@ -819,6 +870,7 @@ function del_wifinet(self, net)
 	return false
 end
 
+-- 通过路由获取状态
 function get_status_by_route(self, addr, mask)
 	local route_statuses = { }
 	local _, object
@@ -840,6 +892,7 @@ function get_status_by_route(self, addr, mask)
 	return route_statuses
 end
 
+-- 通过地址获取状态
 function get_status_by_address(self, addr)
 	local _, object
 	for _, object in ipairs(utl.ubus()) do
@@ -874,6 +927,7 @@ function get_status_by_address(self, addr)
 	end
 end
 
+-- 获取WAN网络
 function get_wan_networks(self)
 	local k, v
 	local wan_nets = { }
@@ -886,6 +940,7 @@ function get_wan_networks(self)
 	return wan_nets
 end
 
+-- 获取WAN6网络
 function get_wan6_networks(self)
 	local k, v
 	local wan6_nets = { }
@@ -898,11 +953,12 @@ function get_wan6_networks(self)
 	return wan6_nets
 end
 
+-- 获取交换机拓扑
 function get_switch_topologies(self)
 	return _swtopo
 end
 
-
+-- 网络构造函数
 function network(name, proto)
 	if name then
 		local p = proto or _uci:get("network", name, "proto")
@@ -911,10 +967,12 @@ function network(name, proto)
 	end
 end
 
+-- 协议类初始化
 function protocol.__init__(self, name)
 	self.sid = name
 end
 
+-- 获取协议选项
 function protocol._get(self, opt)
 	local v = _uci:get("network", self.sid, opt)
 	if type(v) == "table" then
@@ -923,6 +981,7 @@ function protocol._get(self, opt)
 	return v or ""
 end
 
+-- 获取ubus数据
 function protocol._ubus(self, field)
 	if not _ubusnetcache[self.sid] then
 		_ubusnetcache[self.sid] = utl.ubus("network.interface.%s" % self.sid,
@@ -934,14 +993,17 @@ function protocol._ubus(self, field)
 	return _ubusnetcache[self.sid]
 end
 
+-- 获取协议配置
 function protocol.get(self, opt)
 	return _get("network", self.sid, opt)
 end
 
+-- 设置协议配置
 function protocol.set(self, opt, val)
 	return _set("network", self.sid, opt, val)
 end
 
+-- 获取接口名称
 function protocol.ifname(self)
 	local ifname
 	if self:is_floating() then
@@ -955,10 +1017,12 @@ function protocol.ifname(self)
 	return ifname
 end
 
+-- 获取协议名称
 function protocol.proto(self)
 	return "none"
 end
 
+-- 获取协议国际化名称
 function protocol.get_i18n(self)
 	local p = self:proto()
 	if p == "none" then
@@ -972,18 +1036,22 @@ function protocol.get_i18n(self)
 	end
 end
 
+-- 获取协议类型
 function protocol.type(self)
 	return self:_get("type")
 end
 
+-- 获取网络名称
 function protocol.name(self)
 	return self.sid
 end
 
+-- 获取运行时间
 function protocol.uptime(self)
 	return self:_ubus("uptime") or 0
 end
 
+-- 获取过期时间
 function protocol.expires(self)
 	local u = self:_ubus("uptime")
 	local d = self:_ubus("data")
@@ -998,10 +1066,12 @@ function protocol.expires(self)
 	return -1
 end
 
+-- 获取度量值
 function protocol.metric(self)
 	return self:_ubus("metric") or 0
 end
 
+-- 获取区域名称
 function protocol.zonename(self)
 	local d = self:_ubus("data")
 
@@ -1012,11 +1082,13 @@ function protocol.zonename(self)
 	return nil
 end
 
+-- 获取IP地址
 function protocol.ipaddr(self)
 	local addrs = self:_ubus("ipv4-address")
 	return addrs and #addrs > 0 and addrs[1].address
 end
 
+-- 获取所有IP地址
 function protocol.ipaddrs(self)
 	local addrs = self:_ubus("ipv4-address")
 	local rv = { }
@@ -1031,12 +1103,14 @@ function protocol.ipaddrs(self)
 	return rv
 end
 
+-- 获取子网掩码
 function protocol.netmask(self)
 	local addrs = self:_ubus("ipv4-address")
 	return addrs and #addrs > 0 and
 		ipc.IPv4("0.0.0.0/%d" % addrs[1].mask):mask():string()
 end
 
+-- 获取网关地址
 function protocol.gwaddr(self)
 	local _, route
 	for _, route in ipairs(self:_ubus("route") or { }) do
@@ -1046,6 +1120,7 @@ function protocol.gwaddr(self)
 	end
 end
 
+-- 获取DNS地址
 function protocol.dnsaddrs(self)
 	local dns = { }
 	local _, addr
@@ -1057,6 +1132,7 @@ function protocol.dnsaddrs(self)
 	return dns
 end
 
+-- 获取IPv6地址
 function protocol.ip6addr(self)
 	local addrs = self:_ubus("ipv6-address")
 	if addrs and #addrs > 0 then
@@ -1069,6 +1145,7 @@ function protocol.ip6addr(self)
 	end
 end
 
+-- 获取所有IPv6地址
 function protocol.ip6addrs(self)
 	local addrs = self:_ubus("ipv6-address")
 	local rv = { }
@@ -1099,6 +1176,7 @@ function protocol.ip6addrs(self)
 	return rv
 end
 
+-- 获取IPv6网关地址
 function protocol.gw6addr(self)
 	local _, route
 	for _, route in ipairs(self:_ubus("route") or { }) do
@@ -1108,6 +1186,7 @@ function protocol.gw6addr(self)
 	end
 end
 
+-- 获取IPv6 DNS地址
 function protocol.dns6addrs(self)
 	local dns = { }
 	local _, addr
@@ -1119,6 +1198,7 @@ function protocol.dns6addrs(self)
 	return dns
 end
 
+-- 获取IPv6前缀
 function protocol.ip6prefix(self)
 	local prefix = self:_ubus("ipv6-prefix")
 	if prefix and #prefix > 0 then
@@ -1126,6 +1206,7 @@ function protocol.ip6prefix(self)
 	end
 end
 
+-- 获取错误信息
 function protocol.errors(self)
 	local _, err, rv
 	local errors = self:_ubus("errors")
@@ -1142,34 +1223,42 @@ function protocol.errors(self)
 	return rv
 end
 
+-- 判断协议是否为桥接类型
 function protocol.is_bridge(self)
 	return (not self:is_virtual() and self:type() == "bridge")
 end
 
+-- 获取协议包名，默认返回nil
 function protocol.package_name(self)
 	return nil
 end
 
+-- 检查协议是否已安装，默认返回true
 function protocol.is_installed(self)
 	return true
 end
 
+-- 检查是否为虚拟协议，默认返回false
 function protocol.is_virtual(self)
 	return false
 end
 
+-- 检查是否为浮动协议，默认返回false
 function protocol.is_floating(self)
 	return false
 end
 
+-- 检查是否为动态协议，通过ubus查询dynamic状态
 function protocol.is_dynamic(self)
 	return (self:_ubus("dynamic") == true)
 end
 
+-- 检查是否为自动协议，通过检查auto配置项是否为0
 function protocol.is_auto(self)
 	return (self:_get("auto") ~= "0")
 end
 
+-- 检查是否为别名接口
 function protocol.is_alias(self)
 	local ifn, parent = nil, nil
 
@@ -1184,6 +1273,7 @@ function protocol.is_alias(self)
 	return parent
 end
 
+-- 检查协议是否为空
 function protocol.is_empty(self)
 	if self:is_floating() then
 		return false
@@ -1202,10 +1292,12 @@ function protocol.is_empty(self)
 	end
 end
 
+-- 检查协议是否处于启用状态
 function protocol.is_up(self)
 	return (self:_ubus("up") == true)
 end
 
+-- 添加接口到协议
 function protocol.add_interface(self, ifname)
 	ifname = _M:ifnameof(ifname)
 	if ifname and not self:is_floating() then
@@ -1221,6 +1313,7 @@ function protocol.add_interface(self, ifname)
 	end
 end
 
+-- 从协议中删除接口
 function protocol.del_interface(self, ifname)
 	ifname = _M:ifnameof(ifname)
 	if ifname and not self:is_floating() then
@@ -1233,33 +1326,41 @@ function protocol.del_interface(self, ifname)
 	end
 end
 
+-- 获取协议的接口对象
 function protocol.get_interface(self)
+	-- 虚拟协议返回隧道接口
 	if self:is_virtual() then
 		_tunnel[self:proto() .. "-" .. self.sid] = true
 		return interface(self:proto() .. "-" .. self.sid, self)
+	-- 桥接协议返回桥接接口
 	elseif self:is_bridge() then
 		_bridge["br-" .. self.sid] = true
 		return interface("br-" .. self.sid, self)
 	else
+		-- 尝试获取L3设备或普通设备
 		local ifn = self:_ubus("l3_device") or self:_ubus("device")
 		if ifn then
 			return interface(ifn, self)
 		end
 
+		-- 尝试从配置中获取接口名称
 		for ifn in utl.imatch(_uci:get("network", self.sid, "ifname")) do
 			ifn = ifn:match("^[^:/]+")
 			return ifn and interface(ifn, self)
 		end
 
+		-- 尝试获取无线网络接口
 		ifn = _wifi_netid_by_netname(self.sid)
 		return ifn and interface(ifn, self)
 	end
 end
 
+-- 获取协议的所有接口对象
 function protocol.get_interfaces(self)
 	if self:is_bridge() or (self:is_virtual() and not self:is_floating()) then
 		local ifaces = { }
 
+		-- 获取物理接口
 		local ifn
 		local nfs = { }
 		for ifn in utl.imatch(self:get("ifname")) do
@@ -1271,6 +1372,7 @@ function protocol.get_interfaces(self)
 			ifaces[#ifaces+1] = nfs[ifn]
 		end
 
+		-- 获取无线接口
 		local wfs = { }
 		_uci:foreach("wireless", "wifi-iface",
 			function(s)
@@ -1295,15 +1397,19 @@ function protocol.get_interfaces(self)
 	end
 end
 
+-- 检查协议是否包含指定接口
 function protocol.contains_interface(self, ifname)
 	ifname = _M:ifnameof(ifname)
 	if not ifname then
 		return false
+	-- 检查是否为虚拟接口
 	elseif self:is_virtual() and self:proto() .. "-" .. self.sid == ifname then
 		return true
+	-- 检查是否为桥接接口
 	elseif self:is_bridge() and "br-" .. self.sid == ifname then
 		return true
 	else
+		-- 检查物理接口列表
 		local ifn
 		for ifn in utl.imatch(self:get("ifname")) do
 			ifn = ifn:match("[^:]+")
@@ -1312,6 +1418,7 @@ function protocol.contains_interface(self, ifname)
 			end
 		end
 
+		-- 检查无线接口
 		local wif = _wifi_sid_by_ifname(ifname)
 		if wif then
 			local n
@@ -1326,15 +1433,18 @@ function protocol.contains_interface(self, ifname)
 	return false
 end
 
+-- 获取协议的管理链接
 function protocol.adminlink(self)
 	local stat, dsp = pcall(require, "luci.dispatcher")
 	return stat and dsp.build_url("admin", "network", "network", self.sid)
 end
 
-
+-- 接口类定义
 interface = utl.class()
 
+-- 接口类构造函数
 function interface.__init__(self, ifname, network)
+	-- 检查是否为无线接口
 	local wif = _wifi_sid_by_ifname(ifname)
 	if wif then
 		self.wif    = wifinet(wif)
@@ -1346,6 +1456,7 @@ function interface.__init__(self, ifname, network)
 	self.network = network
 end
 
+-- 获取接口的ubus信息
 function interface._ubus(self, field)
 	if not _ubusdevcache[self.ifname] then
 		_ubusdevcache[self.ifname] = utl.ubus("network.device", "status",
@@ -1357,22 +1468,27 @@ function interface._ubus(self, field)
 	return _ubusdevcache[self.ifname]
 end
 
+-- 获取接口名称
 function interface.name(self)
 	return self.wif and self.wif:ifname() or self.ifname
 end
 
+-- 获取接口MAC地址
 function interface.mac(self)
 	return ipc.checkmac(self:_ubus("macaddr"))
 end
 
+-- 获取接口IPv4地址列表
 function interface.ipaddrs(self)
 	return self.dev and self.dev.ipaddrs or { }
 end
 
+-- 获取接口IPv6地址列表
 function interface.ip6addrs(self)
 	return self.dev and self.dev.ip6addrs or { }
 end
 
+-- 获取接口类型
 function interface.type(self)
 	if self.ifname and self.ifname:byte(1) == 64 then
 		return "alias"
@@ -1391,6 +1507,7 @@ function interface.type(self)
 	end
 end
 
+-- 获取接口的短名称，如果是无线接口则返回无线网络短名称，否则返回接口名
 function interface.shortname(self)
 	if self.wif then
 		return self.wif:shortname()
@@ -1399,6 +1516,9 @@ function interface.shortname(self)
 	end
 end
 
+-- 获取接口的国际化显示名称
+-- 无线接口返回格式: "无线网络: 模式 SSID"
+-- 其他接口返回格式: "接口类型: 名称"
 function interface.get_i18n(self)
 	if self.wif then
 		return "%s: %s %q" %{
@@ -1411,6 +1531,8 @@ function interface.get_i18n(self)
 	end
 end
 
+-- 获取接口类型的国际化显示名称
+-- 支持alias/wifi/bridge/switch/vlan/tunnel等类型
 function interface.get_type_i18n(self)
 	local x = self:type()
 	if x == "alias" then
@@ -1434,12 +1556,14 @@ function interface.get_type_i18n(self)
 	end
 end
 
+-- 获取接口的管理链接
 function interface.adminlink(self)
 	if self.wif then
 		return self.wif:adminlink()
 	end
 end
 
+-- 获取网桥的端口列表
 function interface.ports(self)
 	local members = self:_ubus("bridge-members")
 	if members then
@@ -1452,6 +1576,7 @@ function interface.ports(self)
 	end
 end
 
+-- 获取网桥ID
 function interface.bridge_id(self)
 	if self.dev and self.dev.bridge then
 		return self.dev.bridge.id
@@ -1460,6 +1585,7 @@ function interface.bridge_id(self)
 	end
 end
 
+-- 获取网桥STP状态
 function interface.bridge_stp(self)
 	if self.dev and self.dev.bridge then
 		return self.dev.bridge.stp
@@ -1468,6 +1594,7 @@ function interface.bridge_stp(self)
 	end
 end
 
+-- 检查接口是否启用
 function interface.is_up(self)
 	local up = self:_ubus("up")
 	if up == nil then
@@ -1476,39 +1603,47 @@ function interface.is_up(self)
 	return up or false
 end
 
+-- 检查是否为网桥接口
 function interface.is_bridge(self)
 	return (self:type() == "bridge")
 end
 
+-- 检查是否为网桥端口
 function interface.is_bridgeport(self)
 	return self.dev and self.dev.bridge and
 	       (self.dev.bridge.name ~= self:name()) and true or false
 end
 
+-- 获取发送字节数
 function interface.tx_bytes(self)
 	local stat = self:_ubus("statistics")
 	return stat and stat.tx_bytes or 0
 end
 
+-- 获取接收字节数
 function interface.rx_bytes(self)
 	local stat = self:_ubus("statistics")
 	return stat and stat.rx_bytes or 0
 end
 
+-- 获取发送数据包数
 function interface.tx_packets(self)
 	local stat = self:_ubus("statistics")
 	return stat and stat.tx_packets or 0
 end
 
+-- 获取接收数据包数
 function interface.rx_packets(self)
 	local stat = self:_ubus("statistics")
 	return stat and stat.rx_packets or 0
 end
 
+-- 获取接口关联的第一个网络
 function interface.get_network(self)
 	return self:get_networks()[1]
 end
 
+-- 获取接口关联的所有网络列表
 function interface.get_networks(self)
 	if not self.networks then
 		local nets = { }
@@ -1528,13 +1663,16 @@ function interface.get_networks(self)
 	end
 end
 
+-- 获取无线网络接口
 function interface.get_wifinet(self)
 	return self.wif
 end
 
-
+-- wifidev类 - 无线设备类
 wifidev = utl.class()
 
+-- 初始化无线设备
+-- 从UCI配置获取设备信息和iwinfo信息
 function wifidev.__init__(self, name)
 	local t, n = _uci:get("wireless", name)
 	if t == "wifi-device" and n ~= nil then
@@ -1545,18 +1683,23 @@ function wifidev.__init__(self, name)
 	self.iwinfo = self.iwinfo or { ifname = self.sid }
 end
 
+-- 获取无线设备配置选项值
 function wifidev.get(self, opt)
 	return _get("wireless", self.sid, opt)
 end
 
+-- 设置无线设备配置选项值
 function wifidev.set(self, opt, val)
 	return _set("wireless", self.sid, opt, val)
 end
 
+-- 获取设备名称
 function wifidev.name(self)
 	return self.sid
 end
 
+-- 获取支持的无线模式列表
+-- 返回{a,b,g,n,ac}等模式的支持状态
 function wifidev.hwmodes(self)
 	local l = self.iwinfo.hwmodelist
 	if l and next(l) then
@@ -1566,6 +1709,8 @@ function wifidev.hwmodes(self)
 	end
 end
 
+-- 获取设备的国际化显示名称
+-- 格式: "厂商 802.11模式 无线控制器 (设备名)"
 function wifidev.get_i18n(self)
 	local t = self.iwinfo.hardware_name or "Generic"
 	if self.iwinfo.type == "wl" then
@@ -1583,6 +1728,7 @@ function wifidev.get_i18n(self)
 	return "%s 802.11%s Wireless Controller (%s)" %{ t, m, self:name() }
 end
 
+-- 检查设备是否启用
 function wifidev.is_up(self)
 	if _ubuswificache[self.sid] then
 		return (_ubuswificache[self.sid].up == true)
@@ -1591,6 +1737,7 @@ function wifidev.is_up(self)
 	return false
 end
 
+-- 获取指定的无线网络接口
 function wifidev.get_wifinet(self, net)
 	if _uci:get("wireless", net) == "wifi-iface" then
 		return wifinet(net)
@@ -1602,6 +1749,7 @@ function wifidev.get_wifinet(self, net)
 	end
 end
 
+-- 获取设备下的所有无线网络接口
 function wifidev.get_wifinets(self)
 	local nets = { }
 
@@ -1615,6 +1763,7 @@ function wifidev.get_wifinets(self)
 	return nets
 end
 
+-- 添加新的无线网络接口
 function wifidev.add_wifinet(self, options)
 	options = options or { }
 	options.device = self.sid
@@ -1625,6 +1774,7 @@ function wifidev.add_wifinet(self, options)
 	end
 end
 
+-- 删除无线网络接口
 function wifidev.del_wifinet(self, net)
 	if utl.instanceof(net, wifinet) then
 		net = net.sid
@@ -1640,9 +1790,11 @@ function wifidev.del_wifinet(self, net)
 	return false
 end
 
-
+-- wifinet类 - 无线网络接口类
 wifinet = utl.class()
 
+-- 初始化无线网络接口
+-- 通过多种方式查找网络状态信息
 function wifinet.__init__(self, name, data)
 	local sid, netid, radioname, radiostate, netstate
 
@@ -1689,6 +1841,7 @@ function wifinet.__init__(self, name, data)
 	}
 end
 
+-- 获取ubus数据
 function wifinet.ubus(self, ...)
 	local n, v = self._ubusdata
 	for n = 1, select('#', ...) do
@@ -1701,26 +1854,32 @@ function wifinet.ubus(self, ...)
 	return v
 end
 
+-- 获取无线网络配置选项值
 function wifinet.get(self, opt)
 	return _get("wireless", self.sid, opt)
 end
 
+-- 设置无线网络配置选项值
 function wifinet.set(self, opt, val)
 	return _set("wireless", self.sid, opt, val)
 end
 
+-- 获取工作模式(ap/sta/adhoc/mesh/monitor)
 function wifinet.mode(self)
 	return self:ubus("net", "config", "mode") or self:get("mode") or "ap"
 end
 
+-- 获取SSID
 function wifinet.ssid(self)
 	return self:ubus("net", "config", "ssid") or self:get("ssid")
 end
 
+-- 获取BSSID
 function wifinet.bssid(self)
 	return self:ubus("net", "config", "bssid") or self:get("bssid")
 end
 
+-- 获取关联的网络列表
 function wifinet.network(self)
 	local net, networks = nil, { }
 	for net in utl.imatch(self:ubus("net", "config", "network") or self:get("network")) do
@@ -1729,14 +1888,17 @@ function wifinet.network(self)
 	return networks
 end
 
+-- 获取网络ID
 function wifinet.id(self)
 	return self.netid
 end
 
+-- 获取网络名称
 function wifinet.name(self)
 	return self.sid
 end
 
+-- 获取接口名称
 function wifinet.ifname(self)
 	local ifname = self:ubus("net", "ifname") or self.iwinfo.ifname
 	if not ifname or ifname:match("^wifi%d") or ifname:match("^radio%d") then
@@ -1745,16 +1907,20 @@ function wifinet.ifname(self)
 	return ifname
 end
 
+-- 获取无线设备对象
 function wifinet.get_device(self)
 	local dev = self:ubus("radio") or self:get("device")
 	return dev and wifidev(dev) or nil
 end
 
+-- 检查是否启用
 function wifinet.is_up(self)
 	local ifc = self:get_interface()
 	return (ifc and ifc:is_up() or false)
 end
 
+-- 获取当前工作模式
+-- 将ap/sta等模式转换为Master/Client等显示名称
 function wifinet.active_mode(self)
 	local m = self.iwinfo.mode or self:ubus("net", "config", "mode") or self:get("mode") or "ap"
 
@@ -1768,27 +1934,33 @@ function wifinet.active_mode(self)
 	return m
 end
 
+-- 获取工作模式的国际化名称
 function wifinet.active_mode_i18n(self)
 	return lng.translate(self:active_mode())
 end
 
+-- 获取当前SSID
 function wifinet.active_ssid(self)
 	return self.iwinfo.ssid or self:ubus("net", "config", "ssid") or self:get("ssid")
 end
 
+-- 获取当前BSSID
 function wifinet.active_bssid(self)
 	return self.iwinfo.bssid or self:ubus("net", "config", "bssid") or self:get("bssid")
 end
 
+-- 获取当前加密方式
 function wifinet.active_encryption(self)
 	local enc = self.iwinfo and self.iwinfo.encryption
 	return enc and enc.description or "-"
 end
 
+-- 获取关联设备列表
 function wifinet.assoclist(self)
 	return self.iwinfo.assoclist or { }
 end
 
+-- 获取工作频率(GHz)
 function wifinet.frequency(self)
 	local freq = self.iwinfo.frequency
 	if freq and freq > 0 then
@@ -1796,6 +1968,7 @@ function wifinet.frequency(self)
 	end
 end
 
+-- 获取传输速率(Mbps)
 function wifinet.bitrate(self)
 	local rate = self.iwinfo.bitrate
 	if rate and rate > 0 then
@@ -1803,32 +1976,40 @@ function wifinet.bitrate(self)
 	end
 end
 
+-- 获取信道号
 function wifinet.channel(self)
 	return self.iwinfo.channel or self:ubus("dev", "config", "channel") or
 		tonumber(self:get("channel"))
 end
 
+-- 获取信号强度(dBm)
 function wifinet.signal(self)
 	return self.iwinfo.signal or 0
 end
 
+-- 获取噪声水平(dBm)
 function wifinet.noise(self)
 	return self.iwinfo.noise or 0
 end
 
+-- 获取国家代码
 function wifinet.country(self)
 	return self.iwinfo.country or self:ubus("dev", "config", "country") or "00"
 end
 
+-- 获取发射功率(dBm)
 function wifinet.txpower(self)
 	local pwr = (self.iwinfo.txpower or 0)
 	return pwr + self:txpower_offset()
 end
 
+-- 获取发射功率偏移值
 function wifinet.txpower_offset(self)
 	return self.iwinfo.txpower_offset or 0
 end
 
+-- 计算信号水平(0-5)
+-- 基于信噪比计算
 function wifinet.signal_level(self, s, n)
 	if self:active_bssid() ~= "00:00:00:00:00:00" then
 		local signal = s or self:signal()
@@ -1845,6 +2026,7 @@ function wifinet.signal_level(self, s, n)
 	end
 end
 
+-- 计算信号质量百分比
 function wifinet.signal_percent(self)
 	local qc = self.iwinfo.quality or 0
 	local qm = self.iwinfo.quality_max or 0
@@ -1856,6 +2038,8 @@ function wifinet.signal_percent(self)
 	end
 end
 
+-- 获取短名称
+-- 格式: "模式 SSID"
 function wifinet.shortname(self)
 	return "%s %q" %{
 		lng.translate(self:active_mode()),
@@ -1863,6 +2047,8 @@ function wifinet.shortname(self)
 	}
 end
 
+-- 获取国际化显示名称
+-- 格式: "无线网络: 模式 SSID (接口名)"
 function wifinet.get_i18n(self)
 	return "%s: %s %q (%s)" %{
 		lng.translate("Wireless Network"),
@@ -1872,15 +2058,18 @@ function wifinet.get_i18n(self)
 	}
 end
 
+-- 获取管理链接URL
 function wifinet.adminlink(self)
 	local stat, dsp = pcall(require, "luci.dispatcher")
 	return dsp and dsp.build_url("admin", "network", "wireless", self.netid)
 end
 
+-- 获取关联的第一个网络
 function wifinet.get_network(self)
 	return self:get_networks()[1]
 end
 
+-- 获取关联的所有网络列表
 function wifinet.get_networks(self)
 	local nets = { }
 	local net
@@ -1893,17 +2082,21 @@ function wifinet.get_networks(self)
 	return nets
 end
 
+-- 获取网络接口对象
 function wifinet.get_interface(self)
 	return interface(self:ifname())
 end
 
 
 -- setup base protocols
+-- 注册基本网络协议
 _M:register_protocol("static")
 _M:register_protocol("dhcp")
 _M:register_protocol("none")
 
 -- load protocol extensions
+-- 加载协议扩展模块
+-- 获取network目录下的所有文件列表
 local exts = nfs.dir(utl.libpath() .. "/model/network")
 if exts then
 	local ext
